@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import javax.swing.AbstractAction;
 import javax.swing.Box;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -36,6 +37,9 @@ import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.Document;
+import javax.swing.undo.CannotRedoException;
+import javax.swing.undo.CannotUndoException;
+import javax.swing.undo.UndoManager;
 
 public class EditorUI extends JFrame implements ActionListener {
     private final Corretor corretor = new Corretor();
@@ -83,6 +87,7 @@ public class EditorUI extends JFrame implements ActionListener {
         final JTextPane textPane;
         final JLabel titleLabel;
         final JButton closeButton;
+        final UndoManager undoManager = new UndoManager();
         String fileName;
         boolean dirty;
 
@@ -108,6 +113,24 @@ public class EditorUI extends JFrame implements ActionListener {
         }
     }
 
+    private static final class WrappingTextPane extends JTextPane {
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            if (getParent() instanceof javax.swing.JViewport viewport) {
+                return getPreferredSize().width <= viewport.getWidth();
+            }
+            return super.getScrollableTracksViewportWidth();
+        }
+
+        @Override
+        public void setSize(Dimension d) {
+            if (getParent() instanceof javax.swing.JViewport viewport) {
+                d = new Dimension(viewport.getWidth(), d.height);
+            }
+            super.setSize(d);
+        }
+    }
+
     private JPanel createTabComponent(TabInfo tab) {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
         panel.setOpaque(false);
@@ -128,6 +151,18 @@ public class EditorUI extends JFrame implements ActionListener {
 
     private void applyTheme(Theme theme) {
         currentTheme = theme;
+
+        // salva posição de cursor e seleção para preservar após atualizar UI
+        int tabCount = tabs.size();
+        int[] caretPos = new int[tabCount];
+        int[] selStart = new int[tabCount];
+        int[] selEnd = new int[tabCount];
+        for (int i = 0; i < tabCount; i++) {
+            JTextPane pane = tabs.get(i).textPane;
+            caretPos[i] = pane.getCaretPosition();
+            selStart[i] = pane.getSelectionStart();
+            selEnd[i] = pane.getSelectionEnd();
+        }
 
         // paleta de cores centralizada
         Color bgBase = (theme == Theme.ESCURO) ? new Color(45, 45, 45) : new Color(238, 238, 238);
@@ -153,6 +188,18 @@ public class EditorUI extends JFrame implements ActionListener {
             UIManager.put("TabbedPane.selected", tabSelected);
             UIManager.put("TabbedPane.contentAreaColor", tabBg);
             UIManager.put("TabbedPane.opaque", true);
+            UIManager.put("OptionPane.background", bgBase);
+            UIManager.put("OptionPane.messageForeground", fgBase);
+            UIManager.put("OptionPane.buttonAreaBackground", bgBase);
+            UIManager.put("OptionPane.buttonForeground", fgBase);
+            UIManager.put("OptionPane.foreground", fgBase);
+            UIManager.put("Button.background", inputBg);
+            UIManager.put("Button.foreground", fgBase);
+            UIManager.put("TextField.background", inputBg);
+            UIManager.put("TextField.foreground", fgBase);
+            UIManager.put("TextField.caretForeground", fgBase);
+            UIManager.put("TextField.selectionBackground", new Color(75, 110, 175));
+            UIManager.put("TextField.selectionForeground", fgBase);
         } else {
             UIManager.put("Panel.background", bgBase);
             UIManager.put("Label.foreground", fgBase);
@@ -169,6 +216,18 @@ public class EditorUI extends JFrame implements ActionListener {
             UIManager.put("TabbedPane.selected", Color.WHITE);
             UIManager.put("TabbedPane.contentAreaColor", bgBase);
             UIManager.put("TabbedPane.opaque", true);
+            UIManager.put("OptionPane.background", bgBase);
+            UIManager.put("OptionPane.messageForeground", fgBase);
+            UIManager.put("OptionPane.buttonAreaBackground", bgBase);
+            UIManager.put("OptionPane.buttonForeground", fgBase);
+            UIManager.put("OptionPane.foreground", fgBase);
+            UIManager.put("Button.background", Color.WHITE);
+            UIManager.put("Button.foreground", fgBase);
+            UIManager.put("TextField.background", Color.WHITE);
+            UIManager.put("TextField.foreground", fgBase);
+            UIManager.put("TextField.caretForeground", fgBase);
+            UIManager.put("TextField.selectionBackground", new Color(173, 214, 255));
+            UIManager.put("TextField.selectionForeground", fgBase);
         }
 
         // atualiza a Árvore de Componentes com o novo UIManager
@@ -202,6 +261,21 @@ public class EditorUI extends JFrame implements ActionListener {
         // atualiza as áreas de texto do editor
         for (TabInfo tab : tabs) {
             applyThemeToPane(tab.textPane);
+        }
+
+        // restaura posição do cursor e seleção em cada aba (não perde ponto de inserção)
+        for (int i = 0; i < tabs.size(); i++) {
+            JTextPane pane = tabs.get(i).textPane;
+            int maxLen = pane.getDocument().getLength();
+            int cp = Math.min(caretPos[i], maxLen);
+            int ss = Math.min(selStart[i], maxLen);
+            int se = Math.min(selEnd[i], maxLen);
+            try {
+                pane.setCaretPosition(cp);
+                pane.select(ss, se);
+            } catch (IllegalArgumentException ignored) {
+                // casos de seleção inválida após correções de documento
+            }
         }
 
         // garante as cores corretas na Barra de Menus e Painel de Fontes
@@ -238,6 +312,12 @@ public class EditorUI extends JFrame implements ActionListener {
         pane.setForeground(fg);
         pane.setCaretColor(fg);
         pane.setSelectionColor(sel);
+
+        // Garante que o texto digitado após mudança de tema use a cor atual do tema
+        javax.swing.text.MutableAttributeSet inputAttrs = pane.getInputAttributes();
+        javax.swing.text.StyleConstants.setForeground(inputAttrs, fg);
+        javax.swing.text.StyleConstants.setBackground(inputAttrs, bg);
+        pane.setCharacterAttributes(inputAttrs, false);
     }
 
     private void closeTab(int index) {
@@ -395,6 +475,42 @@ public class EditorUI extends JFrame implements ActionListener {
         }
     }
 
+    private void configureUndoRedo(TabInfo tab) {
+        JTextPane pane = tab.textPane;
+        pane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_Z, InputEvent.CTRL_DOWN_MASK), "undo");
+        pane.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_Y, InputEvent.CTRL_DOWN_MASK), "redo");
+        pane.getActionMap().put("undo", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                performUndo(tab);
+            }
+        });
+        pane.getActionMap().put("redo", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                performRedo(tab);
+            }
+        });
+    }
+
+    private void performUndo(TabInfo tab) {
+        if (tab == null || !tab.undoManager.canUndo()) return;
+        try {
+            tab.undoManager.undo();
+        } catch (CannotUndoException ex) {
+            // ignora
+        }
+    }
+
+    private void performRedo(TabInfo tab) {
+        if (tab == null || !tab.undoManager.canRedo()) return;
+        try {
+            tab.undoManager.redo();
+        } catch (CannotRedoException ex) {
+            // ignora
+        }
+    }
+
     private void attachDocumentListeners(TabInfo tab) {
         Document doc = tab.textPane.getDocument();
         if (doc == null) return;
@@ -404,10 +520,13 @@ public class EditorUI extends JFrame implements ActionListener {
             @Override public void removeUpdate(DocumentEvent e) { markDirty(tab, true); }
             @Override public void changedUpdate(DocumentEvent e) { /* não usado */ }
         });
+
+        doc.addUndoableEditListener(e -> tab.undoManager.addEdit(e.getEdit()));
+        configureUndoRedo(tab);
     }
 
     private void criarNovaAba(String fileName, Document document) {
-        JTextPane pane = new JTextPane();
+        JTextPane pane = new WrappingTextPane();
         pane.setFont(new Font("Monospaced", Font.PLAIN, 14));
         applyThemeToPane(pane);
         if (document != null) {
@@ -426,7 +545,7 @@ public class EditorUI extends JFrame implements ActionListener {
         tabs.add(tab);
         attachDocumentListeners(tab);
 
-        JScrollPane scrollPane = new JScrollPane(pane);
+        JScrollPane scrollPane = new JScrollPane(pane, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         tabbedPane.addTab(null, scrollPane);
         int idx = tabbedPane.getTabCount() - 1;
         tabbedPane.setTabComponentAt(idx, createTabComponent(tab));
