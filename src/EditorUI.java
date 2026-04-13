@@ -68,6 +68,9 @@ public class EditorUI extends JFrame implements ActionListener {
     private final JRadioButtonMenuItem itemTemaClaro;
     private final JRadioButtonMenuItem itemTemaEscuro;
 
+    private final JPanel statusBar;
+    private final JLabel statusLabel;
+
     private String lastSearchTerm = null;
     private int lastSearchIndex = -1;
 
@@ -113,11 +116,77 @@ public class EditorUI extends JFrame implements ActionListener {
         }
     }
 
+    private static final class WrapEditorKit extends javax.swing.text.StyledEditorKit {
+        private final javax.swing.text.ViewFactory delegateFactory = super.getViewFactory();
+        private final javax.swing.text.ViewFactory defaultFactory = elem -> {
+            String kind = elem.getName();
+            if (kind != null) {
+                return switch (kind) {
+                    case javax.swing.text.AbstractDocument.ContentElementName -> new WrapLabelView(elem);
+                    case javax.swing.text.AbstractDocument.ParagraphElementName -> new javax.swing.text.ParagraphView(elem) {
+                        @Override
+                        public int getFlowSpan(int index) {
+                            java.awt.Container c = getContainer();
+                            if (c != null) {
+                                return c.getWidth();
+                            }
+                            return super.getFlowSpan(index);
+                        }
+                    };
+                    case javax.swing.text.AbstractDocument.SectionElementName -> new javax.swing.text.BoxView(elem, javax.swing.text.View.Y_AXIS);
+                    case javax.swing.text.StyleConstants.ComponentElementName -> new javax.swing.text.ComponentView(elem);
+                    case javax.swing.text.StyleConstants.IconElementName -> new javax.swing.text.IconView(elem);
+                    default -> delegateFactory.create(elem);
+                };
+            }
+            return delegateFactory.create(elem);
+        };
+
+        @Override
+        public javax.swing.text.ViewFactory getViewFactory() {
+            return defaultFactory;
+        }
+    }
+
+    private static final class WrapLabelView extends javax.swing.text.LabelView {
+        WrapLabelView(javax.swing.text.Element elem) {
+            super(elem);
+        }
+
+        @Override
+        public float getMinimumSpan(int axis) {
+            if (axis == javax.swing.text.View.X_AXIS) {
+                return 0;
+            }
+            return super.getMinimumSpan(axis);
+        }
+
+        @Override
+        public int getBreakWeight(int axis, float pos, float len) {
+            if (axis == javax.swing.text.View.X_AXIS) {
+                return GoodBreakWeight;
+            }
+            return super.getBreakWeight(axis, pos, len);
+        }
+
+        @Override
+        public javax.swing.text.View breakView(int axis, int offset, float pos, float len) {
+            if (axis == javax.swing.text.View.X_AXIS) {
+                return super.breakView(axis, offset, pos, len);
+            }
+            return this;
+        }
+    }
+
     private static final class WrappingTextPane extends JTextPane {
+        WrappingTextPane() {
+            setEditorKit(new WrapEditorKit());
+        }
+
         @Override
         public boolean getScrollableTracksViewportWidth() {
-            if (getParent() instanceof javax.swing.JViewport viewport) {
-                return getPreferredSize().width <= viewport.getWidth();
+            if (getParent() instanceof javax.swing.JViewport) {
+                return true;
             }
             return super.getScrollableTracksViewportWidth();
         }
@@ -278,10 +347,13 @@ public class EditorUI extends JFrame implements ActionListener {
             }
         }
 
-        // garante as cores corretas na Barra de Menus e Painel de Fontes
+        // garante as cores corretas na Barra de Menus, Painel de Fontes e Barra de Status
         barraMenu.setOpaque(true);
         barraMenu.setBackground(bgBase);
         barraMenu.setBorder(javax.swing.BorderFactory.createEmptyBorder()); // Remove linha branca nativa
+
+        statusBar.setBackground(tabBg);
+        statusLabel.setForeground(fgBase);
 
         for (java.awt.Component comp : barraMenu.getComponents()) {
             if (comp instanceof JMenu) {
@@ -318,6 +390,15 @@ public class EditorUI extends JFrame implements ActionListener {
         javax.swing.text.StyleConstants.setForeground(inputAttrs, fg);
         javax.swing.text.StyleConstants.setBackground(inputAttrs, bg);
         pane.setCharacterAttributes(inputAttrs, false);
+
+        // Garante que textos já existentes não mantenham background em desarmonia do tema
+        javax.swing.text.Document doc = pane.getDocument();
+        if (doc instanceof javax.swing.text.StyledDocument styledDoc) {
+            javax.swing.text.SimpleAttributeSet themeAttrs = new javax.swing.text.SimpleAttributeSet();
+            javax.swing.text.StyleConstants.setForeground(themeAttrs, fg);
+            javax.swing.text.StyleConstants.setBackground(themeAttrs, bg);
+            styledDoc.setCharacterAttributes(0, doc.getLength(), themeAttrs, false);
+        }
     }
 
     private void closeTab(int index) {
@@ -392,6 +473,11 @@ public class EditorUI extends JFrame implements ActionListener {
 
         setLayout(new BorderLayout());
         add(tabbedPane, BorderLayout.CENTER);
+
+        statusBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 3));
+        statusLabel = new JLabel();
+        statusBar.add(statusLabel);
+        add(statusBar, BorderLayout.SOUTH);
 
         criarNovaAba(null, null);
 
@@ -516,8 +602,8 @@ public class EditorUI extends JFrame implements ActionListener {
         if (doc == null) return;
 
         doc.addDocumentListener(new DocumentListener() {
-            @Override public void insertUpdate(DocumentEvent e) { handleInsert(tab, e); }
-            @Override public void removeUpdate(DocumentEvent e) { markDirty(tab, true); }
+            @Override public void insertUpdate(DocumentEvent e) { handleInsert(tab, e); updateStatusBar(); }
+            @Override public void removeUpdate(DocumentEvent e) { markDirty(tab, true); updateStatusBar(); }
             @Override public void changedUpdate(DocumentEvent e) { /* não usado */ }
         });
 
@@ -666,6 +752,20 @@ public class EditorUI extends JFrame implements ActionListener {
             titulo += " - " + tab.getDisplayName();
         }
         setTitle(titulo);
+        updateStatusBar();
+    }
+
+    private void updateStatusBar() {
+        JTextPane pane = getCurrentTextPane();
+        if (pane == null) {
+            statusLabel.setText("Linhas: 0 | Caracteres: 0");
+            return;
+        }
+
+        String texto = pane.getText();
+        int charCount = texto.length();
+        int lineCount = pane.getDocument().getDefaultRootElement().getElementCount();
+        statusLabel.setText("Linhas: " + lineCount + " | Caracteres: " + charCount);
     }
 
     private boolean confirmUnsavedChanges(String action) {
