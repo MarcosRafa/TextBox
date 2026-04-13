@@ -10,3 +10,16 @@
 ## Adições futuras
 
 - Compatibilidade com o formato markdown
+
+===================================================================================
+
+## A simple text editor in Java that currently features:
+
+- Line and char counter
+- Auto-correct
+- Besides TXT, it is compatible with the RTF format to allow the use of different font styles and sizes in the same text
+- It comes with a dark/bright theme selector
+
+## Future features
+
+- Compatibility with markdown format
