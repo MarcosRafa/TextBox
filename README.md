@@ -11,7 +11,7 @@
 
 - Compatibilidade com o formato markdown
 
-===================================================================================
+=========================================================
 
 ## A simple text editor in Java that currently features:
 
